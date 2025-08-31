@@ -1,0 +1,30 @@
+index=security source="*security*" OR source="*audit*" OR source="*privilege*"
+| search "privilege" OR "elevated" OR "admin" OR "root" OR "sudo" OR "runas" OR "escalation" OR "access granted"
+| eval Time=strftime(_time, "%Y-%m-%d %H:%M:%S")
+| eval User=coalesce(user, username, account, subject)
+| eval Process=coalesce(process, command, executable, program)
+| eval Privilege_Type=case(
+    match(_raw, "(?i)administrator"), "Administrator",
+    match(_raw, "(?i)root"), "Root Access",
+    match(_raw, "(?i)sudo"), "Sudo Execution",
+    match(_raw, "(?i)runas"), "Run As User",
+    match(_raw, "(?i)system"), "System Level",
+    1=1, "Other Privilege"
+)
+| eval Action=case(
+    match(_raw, "(?i)granted|success"), "Granted",
+    match(_raw, "(?i)denied|failed|error"), "Denied",
+    1=1, "Unknown"
+)
+| eval Source_IP=coalesce(src_ip, source_ip, client_ip, workstation)
+| where User!="" AND User!="SYSTEM" AND User!="system"
+| stats count as Escalation_Attempts, values(Process) as Processes, values(Source_IP) as Source_IPs by User, Privilege_Type, Action, _time span=10m
+| eval Alert_Level=case(
+    Action="Granted" AND Privilege_Type="Root Access", "Critical",
+    Action="Granted" AND Privilege_Type="Administrator", "High",
+    count >= 5, "High",
+    Action="Granted", "Medium",
+    1=1, "Low"
+)
+| sort -Alert_Level -Escalation_Attempts -_time
+| table Time, User, Privilege_Type, Action, Escalation_Attempts, Processes, Source_IPs, Alert_Level 

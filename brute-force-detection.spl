@@ -1,0 +1,34 @@
+index=security source="*auth*" OR source="*login*" OR source="*ssh*" OR source="*rdp*"
+| search "failed" OR "failure" OR "invalid" OR "denied" OR "incorrect password" OR "authentication failed"
+| eval Time=strftime(_time, "%Y-%m-%d %H:%M:%S")
+| eval User=coalesce(user, username, account, login_user)
+| eval Source_IP=coalesce(src_ip, source_ip, client_ip, remote_ip, remote_addr)
+| eval Service=case(
+    match(source, "ssh"), "SSH",
+    match(source, "rdp"), "RDP",
+    match(source, "web"), "Web Application",
+    match(source, "ftp"), "FTP",
+    match(source, "mail"), "Email",
+    1=1, "Other"
+)
+| where Source_IP!="" AND User!=""
+| bucket _time span=5m
+| stats count as Failed_Attempts, values(User) as Targeted_Users, dc(User) as Unique_Users by Source_IP, Service, _time
+| where Failed_Attempts >= 5 OR Unique_Users >= 3
+| eval Attack_Type=case(
+    Failed_Attempts >= 20 AND Unique_Users >= 5, "Distributed Brute Force",
+    Failed_Attempts >= 15, "Intensive Brute Force", 
+    Unique_Users >= 5, "User Enumeration",
+    Failed_Attempts >= 10, "Standard Brute Force",
+    1=1, "Suspicious Activity"
+)
+| eval Severity=case(
+    Attack_Type="Distributed Brute Force", "Critical",
+    Attack_Type="Intensive Brute Force", "High",
+    Attack_Type="User Enumeration", "High",
+    Attack_Type="Standard Brute Force", "Medium",
+    1=1, "Low"
+)
+| eval Time_Window=strftime(_time, "%Y-%m-%d %H:%M")
+| sort -Severity -Failed_Attempts -_time
+| table Time_Window, Source_IP, Service, Attack_Type, Failed_Attempts, Unique_Users, Targeted_Users, Severity 
